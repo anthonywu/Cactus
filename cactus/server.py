@@ -12,6 +12,7 @@ import tornado.ioloop
 import tornado.web
 
 TEMPLATES = {}
+FORCED_HTML_PATHS = set()
 
 class WebSocketHandler(tornado.websocket.WebSocketHandler):
     
@@ -40,7 +41,13 @@ class StaticHandler(tornado.web.StaticFileHandler):
         return False
 
     def get_content_type(self):
-        return mime.guess(self.absolute_path)
+        global FORCED_HTML_PATHS
+        if self.path in FORCED_HTML_PATHS:
+            return "text/html"
+        try:
+            return mime.guess(self.absolute_path)
+        except AttributeError:
+            raise AttributeError('StaticHandler for {} does not have absolute_path attribute'.format(self.path))
 
     def write_error(self, status_code, **kwargs):
 
@@ -61,29 +68,29 @@ class StaticSingleFileHandler(tornado.web.RequestHandler):
 class WebServer(object):
 
     def __init__(self, path, port=8080):
-        
         self.path = path.decode("utf-8")
         self.port = port
 
-        # print type(self.path)
-        # print self.path
-        # print repr(self.path)
-        # print repr(self.path.decode('unicode-escape'))
-        # print self.path.decode('utf-8')
-
-        self.application = tornado.web.Application([
+        handlers = [
             (r'/_cactus/ws', WebSocketHandler),
             (r'/_cactus/cactus.js', StaticSingleFileHandler),
-            (r'/(.*)', StaticHandler, {'path': self.path, "default_filename": "index.html"}),
-        ], template_path=self.path)
+        ]
 
+        global FORCED_HTML_PATHS
+        # coerce top level page files to be served as html
+        for top_level_page_filename in os.listdir(path):
+            if '.' not in top_level_page_filename and os.path.isfile(os.path.join(path, top_level_page_filename)):
+                FORCED_HTML_PATHS.add(top_level_page_filename)
+
+        handlers.append((r'/(.*)', StaticHandler, {'path': self.path, "default_filename": "index.html"}))
+        self.application = tornado.web.Application(handlers, template_path=self.path)
         self.application.log_request = lambda x: self._log_request(x)
 
     def _log_request(self, handler):
 
         if not isinstance(handler, StaticHandler):
             return
-            
+
         if handler.get_status() < 400:
             log_method = logging.info
         elif handler.get_status() < 500:
